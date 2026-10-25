@@ -1,49 +1,149 @@
-"""Decision metrics for a mule-risk score.
 
-You write this file. Keep the signatures exactly as they are: the grader calls them by name.
+import math
+import numpy as np
 
-Rules for every function:
-- y_true and scores are lists or 1-D arrays. Raise ValueError if the lengths differ, the
-  input is empty, a label is not 0 or 1, or a score is NaN.
-- A case is flagged when score >= threshold.
-- Precision is 0.0 when nothing is flagged; recall is 0.0 when there are no positives.
-"""
-from __future__ import annotations
+
+def check_inputs(y_true, scores):
+    y_true = np.asarray(y_true)
+    scores = np.asarray(scores)
+
+    if y_true.ndim != 1 or scores.ndim != 1:
+        raise ValueError("Inputs must be 1-D")
+
+    if len(y_true) == 0 or len(y_true) != len(scores):
+        raise ValueError("Inputs must have the same non-zero length")
+
+    if not np.isin(y_true, [0, 1]).all():
+        raise ValueError("Labels must be 0 or 1")
+
+    try:
+        scores = scores.astype(float)
+    except (TypeError, ValueError):
+        raise ValueError("Scores must be numeric")
+
+    if np.isnan(scores).any():
+        raise ValueError("Scores cannot contain NaN")
+
+    return y_true.astype(int), scores
 
 
 def confusion_at(y_true, scores, threshold: float) -> dict:
-    """Return {"tp": int, "fp": int, "tn": int, "fn": int} at `threshold`."""
-    raise NotImplementedError
+    y_true, scores = check_inputs(y_true, scores)
+
+    tp = 0
+    fp = 0
+    tn = 0
+    fn = 0
+
+    for i in range(len(y_true)):
+        if scores[i] >= threshold:
+            if y_true[i] == 1:
+                tp += 1
+            else:
+                fp += 1
+        else:
+            if y_true[i] == 1:
+                fn += 1
+            else:
+                tn += 1
+
+    return {"tp": tp, "fp": fp, "tn": tn, "fn": fn}
 
 
 def precision_recall_at(y_true, scores, threshold: float) -> tuple[float, float]:
-    """Return (precision, recall) at `threshold`."""
-    raise NotImplementedError
+    result = confusion_at(y_true, scores, threshold)
+
+    tp = result["tp"]
+    fp = result["fp"]
+    fn = result["fn"]
+
+    if tp + fp == 0:
+        precision = 0.0
+    else:
+        precision = tp / (tp + fp)
+
+    if tp + fn == 0:
+        recall = 0.0
+    else:
+        recall = tp / (tp + fn)
+
+    return float(precision), float(recall)
 
 
 def precision_at_k(y_true, scores, k: int) -> float:
-    """Share of positives among the k highest scores.
+    y_true, scores = check_inputs(y_true, scores)
 
-    ValueError if k <= 0; if k > n, use n. Rank by score descending; ties keep their
-    original order.
-    """
-    raise NotImplementedError
+    if k <= 0:
+        raise ValueError("k must be positive")
 
+    if k > len(y_true):
+        k = len(y_true)
 
-def expected_cost(y_true, scores, threshold: float, *, cost_fp: float, cost_fn: float) -> float:
-    """fp * cost_fp + fn * cost_fn at `threshold`."""
-    raise NotImplementedError
+    order = np.argsort(-scores, kind="stable")
+    correct = 0
 
+    for i in range(k):
+        if y_true[order[i]] == 1:
+            correct += 1
 
-def best_threshold(y_true, scores, *, cost_fp: float, cost_fn: float) -> float:
-    """Threshold with the lowest expected cost.
-
-    Candidates are every distinct score plus math.inf ("flag nothing"). On a tie in cost,
-    return the highest threshold (fewer flags for the same cost).
-    """
-    raise NotImplementedError
+    return float(correct / k)
 
 
-def threshold_for_precision(y_true, scores, min_precision: float) -> float | None:
-    """Lowest distinct score whose precision is >= min_precision, or None if none reaches it."""
-    raise NotImplementedError
+def expected_cost(
+    y_true, scores, threshold: float, *, cost_fp: float, cost_fn: float
+) -> float:
+    result = confusion_at(y_true, scores, threshold)
+
+    cost = result["fp"] * cost_fp + result["fn"] * cost_fn
+    return float(cost)
+
+
+def best_threshold(
+    y_true, scores, *, cost_fp: float, cost_fn: float
+) -> float:
+    y_true, scores = check_inputs(y_true, scores)
+
+    thresholds = list(np.unique(scores))
+    thresholds.append(math.inf)
+
+    best = math.inf
+    lowest_cost = math.inf
+
+    for threshold in thresholds:
+        cost = expected_cost(
+            y_true,
+            scores,
+            threshold,
+            cost_fp=cost_fp,
+            cost_fn=cost_fn
+        )
+
+        if cost < lowest_cost or (
+            cost == lowest_cost and threshold > best
+        ):
+            lowest_cost = cost
+            best = threshold
+
+    return float(best)
+
+
+def threshold_for_precision(
+    y_true, scores, min_precision: float
+) -> float | None:
+    y_true, scores = check_inputs(y_true, scores)
+
+    thresholds = np.unique(scores)
+    valid_thresholds = []
+
+    for threshold in thresholds:
+        precision, recall = precision_recall_at(
+            y_true, scores, threshold
+        )
+
+        if precision >= min_precision:
+            valid_thresholds.append(threshold)
+
+    if len(valid_thresholds) == 0:
+        return None
+
+    return float(min(valid_thresholds))
